@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import { router as aiRouter } from "./routes/ai.js";
 import { authRouter } from "./routes/auth/index.js";
+import { chargingRouter } from "./routes/charging/index.js";
 import { connectToDatabase } from "./lib/db.js";
 import { colors, logger, symbols } from "./lib/logger.js";
 
@@ -38,6 +39,7 @@ app.get("/health", (_req, res) => {
 
 app.use("/api/ai", aiRouter);
 app.use("/api/auth", authRouter);
+app.use("/api/charging", chargingRouter);
 
 // Connect to MongoDB and start server
 async function startServer() {
@@ -54,6 +56,9 @@ async function startServer() {
       console.log(`${symbols.api} ${colors.gray("API endpoints:")}`);
       console.log(`   - ${colors.cyan(`http://localhost:${port}/api/ai`)}`);
       console.log(`   - ${colors.cyan(`http://localhost:${port}/api/auth`)}`);
+      console.log(
+        `   - ${colors.cyan(`http://localhost:${port}/api/charging`)}`
+      );
       console.log(`   - ${colors.cyan(`http://localhost:${port}/health`)}`);
     });
   } catch (error) {
