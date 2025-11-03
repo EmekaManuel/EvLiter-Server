@@ -15,6 +15,19 @@ export interface ChargingSessionDocument extends Document {
   batteryLevelStart: number; // percentage at start
   status: "active" | "completed" | "cancelled";
   stationRating?: number; // 1-5, optional
+  // Additional station details stored at session start
+  stationAddress?: string;
+  stationLocation?: {
+    lat: number;
+    lng: number;
+  };
+  stationPricePerKWh?: number; // Price at time of session (in Naira)
+  stationPowerOutput?: number; // kW - station's power output capacity
+  stationConnectorTypes?: string[]; // Available connector types at station
+  stationAmenities?: string[]; // Amenities available at station
+  stationOperatingHours?: string; // Operating hours
+  stationIsCompanyStation?: boolean; // Whether it's an EvLiter company station
+  stationRealtimeAvailability?: string; // Availability at session start
   createdAt: Date;
   updatedAt: Date;
 }
@@ -40,6 +53,19 @@ const ChargingSessionSchema = new Schema<ChargingSessionDocument>(
       index: true,
     },
     stationRating: { type: Number, min: 1, max: 5 },
+    // Additional station details stored at session start
+    stationAddress: { type: String },
+    stationLocation: {
+      lat: { type: Number },
+      lng: { type: Number },
+    },
+    stationPricePerKWh: { type: Number }, // Price at time of session (in Naira)
+    stationPowerOutput: { type: Number }, // kW - station's power output capacity
+    stationConnectorTypes: { type: [String] }, // Available connector types
+    stationAmenities: { type: [String] }, // Amenities available
+    stationOperatingHours: { type: String }, // Operating hours
+    stationIsCompanyStation: { type: Boolean }, // Whether it's an EvLiter company station
+    stationRealtimeAvailability: { type: String }, // Availability at session start
   },
   { timestamps: true }
 );

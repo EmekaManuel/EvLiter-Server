@@ -30,6 +30,15 @@ function sessionToResponse(doc: any): ChargingSessionType {
     batteryLevelStart: doc.batteryLevelStart,
     status: doc.status,
     stationRating: doc.stationRating,
+    stationAddress: doc.stationAddress,
+    stationLocation: doc.stationLocation,
+    stationPricePerKWh: doc.stationPricePerKWh,
+    stationPowerOutput: doc.stationPowerOutput,
+    stationConnectorTypes: doc.stationConnectorTypes,
+    stationAmenities: doc.stationAmenities,
+    stationOperatingHours: doc.stationOperatingHours,
+    stationIsCompanyStation: doc.stationIsCompanyStation,
+    stationRealtimeAvailability: doc.stationRealtimeAvailability,
   };
 }
 
@@ -51,12 +60,42 @@ async function getStationName(stationId: string): Promise<string> {
 }
 
 /**
+ * Calculate estimated charging time based on power output and energy needed
+ * @param powerOutputKw - Station power output in kW
+ * @param energyNeededKWh - Energy needed in kWh
+ * @param efficiency - Charging efficiency (default 0.9 or 90%)
+ * @returns Estimated time in minutes
+ */
+export function calculateEstimatedChargingTime(
+  powerOutputKw: number,
+  energyNeededKWh: number,
+  efficiency: number = 0.9
+): number {
+  if (powerOutputKw <= 0 || energyNeededKWh <= 0) {
+    return 0;
+  }
+  // Account for charging efficiency
+  const actualEnergyNeeded = energyNeededKWh / efficiency;
+  // Calculate time in hours then convert to minutes
+  const timeHours = actualEnergyNeeded / powerOutputKw;
+  return Math.ceil(timeHours * 60); // Round up to nearest minute
+}
+
+/**
  * Calculate cost based on energy delivered and price per kWh
+ * Uses session's stored pricePerKWh if available, otherwise looks up from station
  */
 async function calculateCost(
   energyDelivered: number,
-  stationId: string
+  stationId: string,
+  sessionPricePerKWh?: number
 ): Promise<number> {
+  // Use price stored in session if available (captured at session start)
+  if (sessionPricePerKWh !== undefined && sessionPricePerKWh > 0) {
+    return energyDelivered * sessionPricePerKWh;
+  }
+
+  // Fallback to lookup from station
   try {
     const companyStations = await getCompanyStations();
     const station = companyStations.find((s) => s.id === stationId);
@@ -87,14 +126,33 @@ export async function startChargingSession(
     throw new Error("User already has an active charging session");
   }
 
-  // Get station name
-  const stationName = await getStationName(request.stationId);
+  // Station data is now required in the request
+  const station = request.station;
+  if (!station) {
+    throw new Error("Station data is required to start a charging session");
+  }
 
-  // Create new session
+  // Validate that the stationId matches
+  if (station.id !== request.stationId) {
+    throw new Error("Station ID mismatch between request and station data");
+  }
+
+  // Validate connector type is available at this station
+  if (!station.connectorTypes.includes(request.connectorId)) {
+    throw new Error(
+      `Connector type ${
+        request.connectorId
+      } is not available at this station. Available types: ${station.connectorTypes.join(
+        ", "
+      )}`
+    );
+  }
+
+  // Create new session with all station details
   const session = new ChargingSession({
     userId,
     stationId: request.stationId,
-    stationName,
+    stationName: station.name,
     connectorId: request.connectorId,
     batteryLevel: request.batteryLevelStart,
     batteryLevelStart: request.batteryLevelStart,
@@ -103,6 +161,16 @@ export async function startChargingSession(
     energyDelivered: 0,
     totalCost: 0,
     averagePower: 0,
+    // Store all station details for reference and calculations
+    stationAddress: station.address,
+    stationLocation: station.location,
+    stationPricePerKWh: station.pricePerKWh,
+    stationPowerOutput: station.powerOutput,
+    stationConnectorTypes: station.connectorTypes,
+    stationAmenities: station.amenities,
+    stationOperatingHours: station.operatingHours,
+    stationIsCompanyStation: station.isCompanyStation,
+    stationRealtimeAvailability: station.realtimeAvailability,
   });
 
   await session.save();
@@ -153,12 +221,38 @@ export async function endChargingSession(
   // Calculate average power if we have duration and energy
   if (durationMinutes > 0 && session.energyDelivered > 0) {
     session.averagePower = (session.energyDelivered / durationMinutes) * 60; // kW
+
+    // Compare with station's power output for validation
+    // If average power significantly exceeds station power, cap it
+    if (
+      session.stationPowerOutput &&
+      session.averagePower > session.stationPowerOutput * 1.2
+    ) {
+      // Allow 20% tolerance, but log if it's way off (might indicate measurement error)
+      console.warn(
+        `Average power (${session.averagePower.toFixed(
+          2
+        )} kW) exceeds station power output (${
+          session.stationPowerOutput
+        } kW) for session ${session._id}`
+      );
+    }
+  } else if (session.stationPowerOutput && durationMinutes > 0) {
+    // If we don't have energy but have power output, estimate energy from power
+    // This is a fallback calculation
+    const estimatedEnergyFromPower =
+      (session.stationPowerOutput * durationMinutes) / 60;
+    if (session.energyDelivered === 0) {
+      session.energyDelivered = estimatedEnergyFromPower;
+      session.averagePower = session.stationPowerOutput;
+    }
   }
 
-  // Calculate cost
+  // Calculate cost (use stored pricePerKWh if available)
   session.totalCost = await calculateCost(
     session.energyDelivered,
-    session.stationId
+    session.stationId,
+    session.stationPricePerKWh
   );
 
   session.endTime = endTime;
@@ -211,12 +305,35 @@ export async function updateActiveSession(
   // Calculate average power if we have duration and energy
   if (session.duration > 0 && session.energyDelivered > 0) {
     session.averagePower = (session.energyDelivered / session.duration) * 60; // kW
+
+    // Validate against station power output
+    if (
+      session.stationPowerOutput &&
+      session.averagePower > session.stationPowerOutput * 1.2
+    ) {
+      console.warn(
+        `Average power (${session.averagePower.toFixed(
+          2
+        )} kW) exceeds station power output (${
+          session.stationPowerOutput
+        } kW) for session ${session._id}`
+      );
+    }
+  } else if (session.stationPowerOutput && session.duration > 0) {
+    // Estimate energy from power output if not provided
+    const estimatedEnergyFromPower =
+      (session.stationPowerOutput * session.duration) / 60;
+    if (session.energyDelivered === 0) {
+      session.energyDelivered = estimatedEnergyFromPower;
+      session.averagePower = session.stationPowerOutput;
+    }
   }
 
-  // Update cost
+  // Update cost (use stored pricePerKWh if available)
   session.totalCost = await calculateCost(
     session.energyDelivered,
-    session.stationId
+    session.stationId,
+    session.stationPricePerKWh
   );
 
   await session.save();
