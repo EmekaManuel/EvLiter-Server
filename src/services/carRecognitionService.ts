@@ -94,8 +94,10 @@ export async function generateCarImage(
   try {
     // Try with gpt-image-1 (doesn't support response_format parameter)
     const result = await client.images.generate({
-      model: "gpt-image-1",
+      model: "dall-e-3",
       prompt,
+      response_format: "b64_json",
+      size: "1024x1024",
     });
 
     // Extract base64 image data

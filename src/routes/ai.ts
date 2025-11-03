@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { carRecognitionRouter } from "./ai/carRecognition.js";
 import { carAdvisorRouter } from "./ai/carAdvisor.js";
+import { chargingStationsRouter } from "./ai/chargingStations.js";
 
 export const router = Router();
 
@@ -66,3 +67,6 @@ router.use("/car-recognition", carRecognitionRouter);
 
 // Car advisor routes
 router.use("/advisor", carAdvisorRouter);
+
+// Charging stations routes
+router.use("/charging-stations", chargingStationsRouter);
