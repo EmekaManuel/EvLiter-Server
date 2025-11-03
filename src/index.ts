@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { router as aiRouter } from "./routes/ai.js";
+import { authRouter } from "./routes/auth/index.js";
 
 import dotenv from "dotenv";
 dotenv.config();
@@ -17,6 +18,7 @@ app.get("/health", (_req, res) => {
 });
 
 app.use("/api/ai", aiRouter);
+app.use("/api/auth", authRouter);
 
 app.listen(port, () => {
   console.log(`Server listening on http://localhost:${port}`);
