@@ -71,8 +71,9 @@ export type EndChargingSessionRequest = z.infer<
 
 export const getSessionsRequestSchema = z.object({
   filter: z.enum(["recent", "this-month", "all-time"]).optional(),
-  limit: z.number().int().positive().max(100).optional(),
-  offset: z.number().int().nonnegative().optional(),
+  // Coerce query string values to numbers
+  limit: z.coerce.number().int().positive().max(100).optional(),
+  offset: z.coerce.number().int().nonnegative().optional(),
 });
 
 export type GetSessionsRequest = z.infer<typeof getSessionsRequestSchema>;
