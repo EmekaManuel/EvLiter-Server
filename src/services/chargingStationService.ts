@@ -238,7 +238,22 @@ async function getAISuggestedStations(
   location: string,
   coordinates?: { lat: number; lng: number }
 ): Promise<Omit<ChargingStation, "distance">[]> {
-  const client = createOpenAIClient();
+  // Check if OpenAI API key is configured
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn(
+      "OPENAI_API_KEY not set - AI-suggested stations will not be available. Only EvLiter company stations will be returned."
+    );
+    return [];
+  }
+
+  let client;
+  try {
+    client = createOpenAIClient();
+  } catch (error) {
+    console.error("Failed to create OpenAI client:", error);
+    return [];
+  }
+
   const searchCoords = coordinates ||
     (await getLocationCoordinates(location)) || {
       lat: 6.5244,
@@ -282,15 +297,67 @@ Be realistic about power outputs and locations. Most stations should be 7-50kW, 
     });
 
     const content = completion.choices?.[0]?.message?.content ?? "{}";
-    const data = JSON.parse(content);
+    let data;
+    try {
+      data = JSON.parse(content);
+    } catch (parseError) {
+      console.error("Failed to parse AI response:", parseError);
+      console.error("Response content:", content);
+      return [];
+    }
+
     const stations = Array.isArray(data) ? data : data.stations || [];
 
-    return stations.map((station: any) => ({
-      ...station,
-      isCompanyStation: false,
-    }));
-  } catch (error) {
-    console.error("Failed to get AI-suggested stations:", error);
+    if (stations.length === 0) {
+      console.warn(
+        `AI suggested 0 stations for location: ${location}. This might indicate an issue with the AI response format.`
+      );
+    }
+
+    // Validate and map stations
+    const validStations = stations
+      .map((station: any): Omit<ChargingStation, "distance"> | null => {
+        // Validate required fields
+        if (
+          !station.id ||
+          !station.name ||
+          !station.address ||
+          !station.location ||
+          !station.powerOutput
+        ) {
+          console.warn("Invalid station data from AI:", station);
+          return null;
+        }
+        return {
+          ...station,
+          isCompanyStation: false,
+          // Ensure connectorTypes is an array
+          connectorTypes: Array.isArray(station.connectorTypes)
+            ? station.connectorTypes
+            : ["Type2"],
+          // Ensure realtimeAvailability is valid
+          realtimeAvailability: station.realtimeAvailability || "Available",
+          // Ensure amenities is an array
+          amenities: Array.isArray(station.amenities) ? station.amenities : [],
+        };
+      })
+      .filter(
+        (
+          station: Omit<ChargingStation, "distance"> | null
+        ): station is Omit<ChargingStation, "distance"> => station !== null
+      );
+
+    console.log(
+      `AI suggested ${validStations.length} stations for location: ${location}`
+    );
+    return validStations;
+  } catch (error: any) {
+    console.error("Failed to get AI-suggested stations:", {
+      error: error?.message,
+      location,
+      coordinates: searchCoords,
+      stack: error?.stack,
+    });
     return [];
   }
 }
@@ -377,6 +444,10 @@ export async function searchChargingStations(
       );
       return { ...station, distance };
     }
+  );
+
+  console.log(
+    `Search results for "${validated.location}": ${companyStations.length} company stations, ${aiSuggestedStations.length} AI-suggested stations`
   );
 
   // Combine all stations

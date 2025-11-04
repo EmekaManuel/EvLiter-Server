@@ -46,3 +46,27 @@ export const carRecognitionResultSchema = z.object({
 
 export type CarSpec = z.infer<typeof carSpecSchema>;
 export type CarRecognitionResult = z.infer<typeof carRecognitionResultSchema>;
+
+// Query schemas for retrieving saved recognitions
+export const getRecognitionsQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).optional().default(50),
+  offset: z.coerce.number().int().nonnegative().optional().default(0),
+});
+
+export const searchRecognitionsQuerySchema = z.object({
+  make: z.string().optional(),
+  model: z.string().optional(),
+  year: z.coerce
+    .number()
+    .int()
+    .min(1900)
+    .max(new Date().getFullYear() + 1)
+    .optional(),
+  limit: z.coerce.number().int().positive().max(100).optional().default(50),
+  offset: z.coerce.number().int().nonnegative().optional().default(0),
+});
+
+export type GetRecognitionsQuery = z.infer<typeof getRecognitionsQuerySchema>;
+export type SearchRecognitionsQuery = z.infer<
+  typeof searchRecognitionsQuerySchema
+>;

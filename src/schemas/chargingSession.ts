@@ -67,7 +67,8 @@ export type MonthlyUsage = z.infer<typeof monthlyUsageSchema>;
 // Request schemas
 export const startChargingSessionRequestSchema = z.object({
   stationId: z.string(),
-  connectorId: z.string(),
+  connectorId: z.string(), // Connector identifier (e.g., "station-002-c1")
+  connectorType: z.string().optional(), // Connector type (e.g., "CCS", "CHAdeMO") - used for validation
   batteryLevelStart: z.number().min(0).max(100),
   // Station object with full details - required to ensure proper data capture
   station: chargingStationSchema,

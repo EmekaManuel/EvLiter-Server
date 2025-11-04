@@ -2,6 +2,8 @@ import { createOpenAIClient } from "../lib/openaiClient.js";
 import { z } from "zod";
 import fs from "fs";
 import path from "path";
+import { connectToDatabase } from "../lib/db.js";
+import { CarRecognition } from "../models/CarRecognition.js";
 import {
   carRecognitionResultSchema,
   vinSchema,
@@ -142,7 +144,8 @@ export async function generateCarImage(
 }
 
 export async function recognizeCarByVIN(
-  vinInput: string
+  vinInput: string,
+  userId?: string
 ): Promise<CarRecognitionResult> {
   const vin = vinSchema.parse(vinInput);
   const client = createOpenAIClient();
@@ -179,7 +182,12 @@ export async function recognizeCarByVIN(
       // Continue without image if generation fails
     }
 
-    return { ...result, vin, imagePath };
+    const recognitionResult = { ...result, vin, imagePath };
+
+    // Save to database
+    await saveRecognitionToDatabase(recognitionResult, "vin", userId);
+
+    return recognitionResult;
   } catch {
     // Best-effort fallback with minimal fields
     let imagePath: string | null = null;
@@ -193,7 +201,7 @@ export async function recognizeCarByVIN(
       // Ignore image generation errors in fallback
     }
 
-    return carRecognitionResultSchema.parse({
+    const fallbackResult = carRecognitionResultSchema.parse({
       vin,
       make: "Unknown",
       model: "Unknown",
@@ -204,11 +212,17 @@ export async function recognizeCarByVIN(
       confidence: 0,
       sources: [],
     });
+
+    // Save fallback result to database
+    await saveRecognitionToDatabase(fallbackResult, "vin", userId);
+
+    return fallbackResult;
   }
 }
 
 export async function recognizeCarBySpec(
-  specInput: CarSpec
+  specInput: CarSpec,
+  userId?: string
 ): Promise<CarRecognitionResult> {
   const spec = carSpecSchema.parse(specInput);
   const client = createOpenAIClient();
@@ -252,7 +266,12 @@ export async function recognizeCarBySpec(
       // Continue without image if generation fails
     }
 
-    return { ...result, imagePath };
+    const recognitionResult = { ...result, imagePath };
+
+    // Save to database
+    await saveRecognitionToDatabase(recognitionResult, "spec", userId);
+
+    return recognitionResult;
   } catch {
     // Best-effort fallback - try to generate image even with fallback data
     let imagePath: string | null = null;
@@ -266,7 +285,7 @@ export async function recognizeCarBySpec(
       // Ignore image generation errors in fallback
     }
 
-    return carRecognitionResultSchema.parse({
+    const fallbackResult = carRecognitionResultSchema.parse({
       make: spec.make,
       model: spec.model,
       year: spec.year,
@@ -276,5 +295,227 @@ export async function recognizeCarBySpec(
       confidence: 0,
       sources: [],
     });
+
+    // Save fallback result to database
+    await saveRecognitionToDatabase(fallbackResult, "spec", userId);
+
+    return fallbackResult;
   }
+}
+
+/**
+ * Save car recognition result to database
+ */
+async function saveRecognitionToDatabase(
+  result: CarRecognitionResult,
+  method: "vin" | "spec",
+  userId?: string
+): Promise<void> {
+  try {
+    await connectToDatabase();
+
+    const recognitionData = {
+      userId: userId || undefined,
+      vin: result.vin || undefined,
+      make: result.make,
+      carModel: result.model, // Map 'model' to 'carModel' in database
+      year: result.year,
+      trim: result.trim || undefined,
+      bodyStyle: result.bodyStyle || undefined,
+      drivetrain: result.drivetrain || undefined,
+      engine: result.engine || undefined,
+      battery: result.battery || undefined,
+      imagePath: result.imagePath || undefined,
+      connectorTypes: result.connectorTypes || [],
+      charging: result.charging
+        ? {
+            capacityKWh: result.charging.capacityKWh || undefined,
+            acMaxKw: result.charging.acMaxKw || undefined,
+            dcMaxKw: result.charging.dcMaxKw || undefined,
+            onboardChargerKw: result.charging.onboardChargerKw || undefined,
+            chargePortLocation: result.charging.chargePortLocation || undefined,
+          }
+        : undefined,
+      confidence: result.confidence,
+      sources: result.sources || [],
+      recognitionMethod: method,
+    };
+
+    await CarRecognition.create(recognitionData);
+  } catch (error) {
+    // Log error but don't fail the recognition request
+    console.error("Failed to save car recognition to database:", error);
+  }
+}
+
+/**
+ * Convert database document to API response format
+ */
+function recognitionToResponse(
+  doc: any
+): CarRecognitionResult & { id: string; createdAt: string; updatedAt: string } {
+  return {
+    id: doc._id.toString(),
+    vin: doc.vin,
+    make: doc.make,
+    model: doc.carModel, // Map 'carModel' back to 'model' in API response
+    year: doc.year,
+    trim: doc.trim || null,
+    bodyStyle: doc.bodyStyle || null,
+    drivetrain: doc.drivetrain || null,
+    engine: doc.engine || null,
+    battery: doc.battery || null,
+    imagePath: doc.imagePath || null,
+    connectorTypes: doc.connectorTypes || [],
+    charging: doc.charging
+      ? {
+          capacityKWh: doc.charging.capacityKWh || null,
+          acMaxKw: doc.charging.acMaxKw || null,
+          dcMaxKw: doc.charging.dcMaxKw || null,
+          onboardChargerKw: doc.charging.onboardChargerKw || null,
+          chargePortLocation: doc.charging.chargePortLocation || null,
+        }
+      : undefined,
+    confidence: doc.confidence,
+    sources: doc.sources || [],
+    createdAt: doc.createdAt.toISOString(),
+    updatedAt: doc.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Get user's car recognition history
+ */
+export async function getUserRecognitions(
+  userId: string,
+  limit: number = 50,
+  offset: number = 0
+): Promise<
+  (CarRecognitionResult & {
+    id: string;
+    createdAt: string;
+    updatedAt: string;
+  })[]
+> {
+  await connectToDatabase();
+
+  const recognitions = await CarRecognition.find({ userId })
+    .sort({ createdAt: -1 })
+    .skip(offset)
+    .limit(limit)
+    .lean();
+
+  return recognitions.map(recognitionToResponse);
+}
+
+/**
+ * Get car recognition by ID
+ */
+export async function getRecognitionById(
+  recognitionId: string,
+  userId?: string
+): Promise<
+  | (CarRecognitionResult & {
+      id: string;
+      createdAt: string;
+      updatedAt: string;
+    })
+  | null
+> {
+  await connectToDatabase();
+
+  const query: any = { _id: recognitionId };
+  // If userId is provided, ensure the recognition belongs to that user
+  if (userId) {
+    query.userId = userId;
+  }
+
+  const recognition = await CarRecognition.findOne(query).lean();
+
+  if (!recognition) {
+    return null;
+  }
+
+  return recognitionToResponse(recognition);
+}
+
+/**
+ * Get car recognition by VIN
+ */
+export async function getRecognitionByVIN(
+  vin: string,
+  userId?: string
+): Promise<
+  | (CarRecognitionResult & {
+      id: string;
+      createdAt: string;
+      updatedAt: string;
+    })
+  | null
+> {
+  await connectToDatabase();
+
+  const query: any = { vin };
+  // If userId is provided, prioritize user's own recognition
+  if (userId) {
+    query.userId = userId;
+  }
+
+  const recognition = await CarRecognition.findOne(query)
+    .sort({ createdAt: -1 })
+    .lean();
+
+  if (!recognition) {
+    return null;
+  }
+
+  return recognitionToResponse(recognition);
+}
+
+/**
+ * Search car recognitions by make, model, and/or year
+ */
+export async function searchRecognitions(
+  filters: {
+    make?: string;
+    model?: string;
+    year?: number;
+    userId?: string;
+  },
+  limit: number = 50,
+  offset: number = 0
+): Promise<
+  (CarRecognitionResult & {
+    id: string;
+    createdAt: string;
+    updatedAt: string;
+  })[]
+> {
+  await connectToDatabase();
+
+  const query: any = {};
+
+  if (filters.make) {
+    query.make = { $regex: new RegExp(filters.make, "i") }; // Case-insensitive search
+  }
+
+  if (filters.model) {
+    query.carModel = { $regex: new RegExp(filters.model, "i") }; // Case-insensitive search
+  }
+
+  if (filters.year) {
+    query.year = filters.year;
+  }
+
+  if (filters.userId) {
+    query.userId = filters.userId;
+  }
+
+  const recognitions = await CarRecognition.find(query)
+    .sort({ createdAt: -1 })
+    .skip(offset)
+    .limit(limit)
+    .lean();
+
+  return recognitions.map(recognitionToResponse);
 }

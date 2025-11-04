@@ -82,6 +82,81 @@ export function calculateEstimatedChargingTime(
 }
 
 /**
+ * Calculate real-time charging session values based on elapsed time
+ * @param session - The charging session document
+ * @param batteryCapacityKWh - Battery capacity in kWh (default 60 kWh)
+ * @param efficiency - Charging efficiency (default 0.9 or 90%)
+ * @returns Calculated values for energy, power, cost, and battery level
+ */
+function calculateRealTimeValues(
+  session: any,
+  batteryCapacityKWh: number = 60,
+  efficiency: number = 0.9
+): {
+  energyDelivered: number;
+  averagePower: number;
+  totalCost: number;
+  batteryLevel: number;
+  duration: number;
+} {
+  const now = new Date();
+  const durationMs = now.getTime() - session.startTime.getTime();
+  const durationMinutes = Math.floor(durationMs / (1000 * 60));
+  const durationHours = durationMinutes / 60;
+
+  // Use station power output if available, otherwise use stored average power or default
+  const powerOutputKw = session.stationPowerOutput || session.averagePower || 0;
+
+  if (powerOutputKw <= 0 || durationMinutes <= 0) {
+    return {
+      energyDelivered: session.energyDelivered || 0,
+      averagePower: session.averagePower || 0,
+      totalCost: session.totalCost || 0,
+      batteryLevel: session.batteryLevel || session.batteryLevelStart,
+      duration: durationMinutes,
+    };
+  }
+
+  // Calculate energy delivered: Power (kW) × Time (hours) × Efficiency
+  const calculatedEnergy = powerOutputKw * durationHours * efficiency;
+
+  // Use the maximum of calculated vs stored energy (ensures values never decrease)
+  const energyDelivered = Math.max(
+    calculatedEnergy,
+    session.energyDelivered || 0
+  );
+
+  // Calculate average power (kW)
+  const averagePower =
+    durationHours > 0 ? energyDelivered / durationHours : powerOutputKw;
+
+  // Calculate cost: Energy (kWh) × Price per kWh
+  const pricePerKWh = session.stationPricePerKWh || 0;
+  const totalCost = energyDelivered * pricePerKWh;
+
+  // Calculate battery level: Start Level + (Energy / Battery Capacity) × 100
+  const batteryIncrease = (energyDelivered / batteryCapacityKWh) * 100;
+  const calculatedBatteryLevel = Math.min(
+    100,
+    session.batteryLevelStart + batteryIncrease
+  );
+
+  // Use the maximum of calculated vs stored battery level (ensures values never decrease)
+  const batteryLevel = Math.max(
+    calculatedBatteryLevel,
+    session.batteryLevel || session.batteryLevelStart
+  );
+
+  return {
+    energyDelivered: parseFloat(energyDelivered.toFixed(2)),
+    averagePower: parseFloat(averagePower.toFixed(2)),
+    totalCost: parseFloat(totalCost.toFixed(2)),
+    batteryLevel: parseFloat(batteryLevel.toFixed(1)),
+    duration: durationMinutes,
+  };
+}
+
+/**
  * Calculate cost based on energy delivered and price per kWh
  * Uses session's stored pricePerKWh if available, otherwise looks up from station
  */
@@ -138,11 +213,12 @@ export async function startChargingSession(
   }
 
   // Validate connector type is available at this station
-  if (!station.connectorTypes.includes(request.connectorId)) {
+  // Use connectorType if provided, otherwise try to extract from connectorId or use connectorId
+  const connectorTypeToValidate = request.connectorType || request.connectorId;
+
+  if (!station.connectorTypes.includes(connectorTypeToValidate)) {
     throw new Error(
-      `Connector type ${
-        request.connectorId
-      } is not available at this station. Available types: ${station.connectorTypes.join(
+      `Connector type ${connectorTypeToValidate} is not available at this station. Available types: ${station.connectorTypes.join(
         ", "
       )}`
     );
@@ -289,52 +365,35 @@ export async function updateActiveSession(
     throw new Error("No active charging session found");
   }
 
-  // Update battery level
-  session.batteryLevel = request.batteryLevel;
+  // Calculate real-time values based on elapsed time
+  const realTimeValues = calculateRealTimeValues(session);
 
-  // Update energy delivered if provided
+  // Update battery level - use provided value or calculated value (whichever is higher)
+  if (request.batteryLevel !== undefined) {
+    session.batteryLevel = Math.max(
+      request.batteryLevel,
+      realTimeValues.batteryLevel
+    );
+  } else {
+    session.batteryLevel = realTimeValues.batteryLevel;
+  }
+
+  // Update energy delivered - use provided value or calculated value (whichever is higher)
   if (request.energyDelivered !== undefined) {
-    session.energyDelivered = request.energyDelivered;
+    session.energyDelivered = Math.max(
+      request.energyDelivered,
+      realTimeValues.energyDelivered
+    );
+  } else {
+    session.energyDelivered = realTimeValues.energyDelivered;
   }
 
-  // Calculate current duration
-  const now = new Date();
-  const durationMs = now.getTime() - session.startTime.getTime();
-  session.duration = Math.floor(durationMs / (1000 * 60));
+  // Update duration and power
+  session.duration = realTimeValues.duration;
+  session.averagePower = realTimeValues.averagePower;
 
-  // Calculate average power if we have duration and energy
-  if (session.duration > 0 && session.energyDelivered > 0) {
-    session.averagePower = (session.energyDelivered / session.duration) * 60; // kW
-
-    // Validate against station power output
-    if (
-      session.stationPowerOutput &&
-      session.averagePower > session.stationPowerOutput * 1.2
-    ) {
-      console.warn(
-        `Average power (${session.averagePower.toFixed(
-          2
-        )} kW) exceeds station power output (${
-          session.stationPowerOutput
-        } kW) for session ${session._id}`
-      );
-    }
-  } else if (session.stationPowerOutput && session.duration > 0) {
-    // Estimate energy from power output if not provided
-    const estimatedEnergyFromPower =
-      (session.stationPowerOutput * session.duration) / 60;
-    if (session.energyDelivered === 0) {
-      session.energyDelivered = estimatedEnergyFromPower;
-      session.averagePower = session.stationPowerOutput;
-    }
-  }
-
-  // Update cost (use stored pricePerKWh if available)
-  session.totalCost = await calculateCost(
-    session.energyDelivered,
-    session.stationId,
-    session.stationPricePerKWh
-  );
+  // Update cost using calculated energy
+  session.totalCost = realTimeValues.totalCost;
 
   await session.save();
 
@@ -384,7 +443,7 @@ export async function getUserSessions(
 }
 
 /**
- * Get user's active session
+ * Get user's active session with real-time calculated values
  */
 export async function getActiveSession(
   userId: string
@@ -394,11 +453,21 @@ export async function getActiveSession(
   const session = await ChargingSession.findOne({
     userId,
     status: "active",
-  }).lean();
+  });
 
   if (!session) {
     return null;
   }
+
+  // Calculate real-time values based on elapsed time
+  const realTimeValues = calculateRealTimeValues(session);
+
+  // Update session with calculated values (but don't save - just for response)
+  session.energyDelivered = realTimeValues.energyDelivered;
+  session.averagePower = realTimeValues.averagePower;
+  session.totalCost = realTimeValues.totalCost;
+  session.batteryLevel = realTimeValues.batteryLevel;
+  session.duration = realTimeValues.duration;
 
   return sessionToResponse(session);
 }
