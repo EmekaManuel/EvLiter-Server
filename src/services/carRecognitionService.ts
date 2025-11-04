@@ -341,10 +341,22 @@ async function saveRecognitionToDatabase(
       recognitionMethod: method,
     };
 
-    await CarRecognition.create(recognitionData);
-  } catch (error) {
+    const saved = await CarRecognition.create(recognitionData);
+    console.log(
+      `Successfully saved car recognition: ${saved._id} for user: ${
+        userId || "anonymous"
+      }`
+    );
+  } catch (error: any) {
     // Log error but don't fail the recognition request
-    console.error("Failed to save car recognition to database:", error);
+    console.error("Failed to save car recognition to database:", {
+      error: error?.message || error,
+      stack: error?.stack,
+      userId,
+      make: result.make,
+      model: result.model,
+      year: result.year,
+    });
   }
 }
 

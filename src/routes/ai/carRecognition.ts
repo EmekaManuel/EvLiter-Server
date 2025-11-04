@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { requireAuth, optionalAuth } from "../../middleware/auth.js";
 import {
   carSpecSchema,
   vinSchema,
@@ -22,7 +23,7 @@ const modelBodySchema = carSpecSchema;
 
 // VIN recognition - can be used with or without authentication
 // If authenticated, the result will be saved with userId
-carRecognitionRouter.post("/vin", async (req: any, res) => {
+carRecognitionRouter.post("/vin", optionalAuth, async (req: any, res) => {
   const parse = vinBodySchema.safeParse(req.body);
   if (!parse.success) {
     return res
@@ -43,7 +44,7 @@ carRecognitionRouter.post("/vin", async (req: any, res) => {
 
 // Model/Spec recognition - can be used with or without authentication
 // If authenticated, the result will be saved with userId
-carRecognitionRouter.post("/model", async (req: any, res) => {
+carRecognitionRouter.post("/model", optionalAuth, async (req: any, res) => {
   const parse = modelBodySchema.safeParse(req.body);
   if (!parse.success) {
     return res
@@ -66,12 +67,9 @@ carRecognitionRouter.post("/model", async (req: any, res) => {
  * GET /api/ai/car-recognition
  * Get user's car recognition history (requires authentication)
  */
-carRecognitionRouter.get("/", async (req: any, res) => {
+carRecognitionRouter.get("/", requireAuth, async (req: any, res) => {
   try {
-    const userId = req.user?.id;
-    if (!userId) {
-      return res.status(401).json({ error: "Authentication required" });
-    }
+    const userId = req.user.id; // Middleware ensures user is authenticated
 
     const parse = getRecognitionsQuerySchema.safeParse(req.query);
     if (!parse.success) {
