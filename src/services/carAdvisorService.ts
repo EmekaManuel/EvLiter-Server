@@ -12,7 +12,7 @@ import {
   type CostEstimateResult,
   type RecommendationRequest,
   type RecommendationResult,
-} from "../schemas/carAdvisor";
+} from "../schemas/carAdvisor.js";
 
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 

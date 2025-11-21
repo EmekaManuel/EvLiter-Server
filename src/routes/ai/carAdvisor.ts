@@ -3,12 +3,12 @@ import {
   calculateChargingTime,
   calculateCostEstimate,
   getRecommendations,
-} from "../../services/carAdvisorService";
+} from "../../services/carAdvisorService.js";
 import {
   chargingTimeRequestSchema,
   costEstimateRequestSchema,
   recommendationRequestSchema,
-} from "../../schemas/carAdvisor";
+} from "../../schemas/carAdvisor.js";
 
 export const carAdvisorRouter = Router();
 
