@@ -41,7 +41,7 @@ const ChargingInfoSchema = new Schema(
 const CarRecognitionSchema = new Schema<CarRecognitionDocument>(
   {
     userId: { type: String, index: true }, // Index for user-specific queries
-    vin: { type: String, index: true }, // Index for VIN lookups
+    vin: { type: String }, // Index for VIN lookups (defined below)
     make: { type: String, required: true, index: true },
     carModel: { type: String, required: true, index: true }, // Renamed from 'model'
     year: { type: Number, required: true, index: true },
@@ -65,9 +65,12 @@ const CarRecognitionSchema = new Schema<CarRecognitionDocument>(
 );
 
 // Compound indexes for efficient queries
-CarRecognitionSchema.index({ userId: 1, createdAt: -1 });
-CarRecognitionSchema.index({ make: 1, carModel: 1, year: 1 });
-CarRecognitionSchema.index({ vin: 1 });
+// Only create indexes if model doesn't already exist to avoid duplicate index warnings
+if (!mongoose.models.CarRecognition) {
+  CarRecognitionSchema.index({ userId: 1, createdAt: -1 });
+  CarRecognitionSchema.index({ make: 1, carModel: 1, year: 1 });
+  CarRecognitionSchema.index({ vin: 1 });
+}
 
 export const CarRecognition: Model<CarRecognitionDocument> =
   mongoose.models.CarRecognition ||

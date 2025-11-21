@@ -14,9 +14,28 @@ export async function connectToDatabase(uri?: string) {
   }
 
   mongoose.set("strictQuery", true);
-  await mongoose.connect(mongoUri, {
+
+  const connectionOptions = {
     dbName: process.env.MONGODB_DB || undefined,
-  } as any);
+    serverSelectionTimeoutMS: 30000, // 30 seconds - wait longer for server selection
+    socketTimeoutMS: 45000, // 45 seconds - wait longer for socket operations
+    connectTimeoutMS: 30000, // 30 seconds - wait longer for initial connection
+    retryWrites: true,
+    retryReads: true,
+    maxPoolSize: 10, // Maintain up to 10 socket connections
+    minPoolSize: 2, // Maintain at least 2 socket connections
+    heartbeatFrequencyMS: 10000, // Check server status every 10 seconds
+  };
+
+  try {
+    await mongoose.connect(mongoUri, connectionOptions);
+  } catch (error) {
+    logger.error(
+      `${symbols.error} ${colors.red("MongoDB connection failed:")}`,
+      error as any
+    );
+    throw error;
+  }
   isConnected = true;
 
   // Log connection success
